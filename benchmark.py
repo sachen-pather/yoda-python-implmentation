@@ -1,41 +1,94 @@
-import time
 import os
+import time
+import platform
 import sys
 from dea import DEA
 
-def print_data(label, data, max_display=20, max_text=40):
-    """Print data sample in hex and text format."""
-    # Print hex representation
+# Function to get CPU cycles
+def get_cycles():
+    """Get actual CPU cycles using the rdtsc extension"""
+    try:
+        import rdtsc
+        return rdtsc.rdtsc()
+    except ImportError:
+        print("Warning: rdtsc module not found. Using time-based approximation instead.")
+        print("To get actual CPU cycles, build and install the rdtsc extension:")
+        print("  python setup.py build")
+        print("  python setup.py install")
+        # Fallback to timing-based approximation
+        return int(time.perf_counter_ns() * 3.0)  # Assuming 3.0 GHz CPU
+
+# Function to print data as both hex and as a string
+def print_data(label, data, length=None):
+    if length is None:
+        length = len(data)
+    
+    # Hex display
     print(f"{label} (hex): ", end="")
-    display_length = min(len(data), max_display)
+    display_length = min(length, 20)
     for i in range(display_length):
         print(f"{data[i]:02X} ", end="")
-    if len(data) > max_display:
+    if length > 20:
         print("... (truncated)")
     else:
         print()
     
-    # Print text representation
+    # Text display
     print(f"{label} (text): \"", end="")
-    display_length = min(len(data), max_text)
+    display_length = min(length, 40)
     for i in range(display_length):
         if 32 <= data[i] <= 126:  # Printable ASCII
             print(chr(data[i]), end="")
         else:
             print(".", end="")
-    if len(data) > max_text:
+    if length > 40:
         print("...\"")
     else:
         print("\"")
 
-def run_basic_test():
-    """Run the basic DEA test with a small message."""
-    print("=== Basic DEA Test ===")
+# Function to load a file into memory
+def load_file(filename):
+    try:
+        with open(filename, 'rb') as f:
+            data = f.read()
+        return data
+    except Exception as e:
+        print(f"Error: Could not open file {filename}: {e}")
+        return None
+
+# Function to write data to a file
+def write_file(filename, data):
+    try:
+        with open(filename, 'wb') as f:
+            f.write(data)
+        return True
+    except Exception as e:
+        print(f"Error: Could not write to file {filename}: {e}")
+        return False
+
+def main():
+    # Try to import rdtsc extension
+    try:
+        import rdtsc
+        print("RDTSC module loaded - using actual CPU cycle measurements")
+    except ImportError:
+        print("Warning: RDTSC module not available - using time-based approximation")
+        print("For actual CPU cycle counts, build and install the rdtsc extension")
+    
+    # Input/output file names
+    input_file = "test_input.txt"
+    encrypted_file = "python_encrypted_output.bin"
+    decrypted_file = "python_decrypted_output.txt"
+    
+    # Number of iterations for more accurate timing
+    num_iterations = 10
+    
+    print("\n=== Python Multi-Key DEA Encryption Test ===\n")
+    print(f"Input file: {input_file}")
+    print(f"Number of iterations for encryption: {num_iterations}")
     
     # Initialize DEA
     dea = DEA()
-    
-    # Set 4 different keys
     print("Setting up 4 encryption keys...")
     dea.reset()
     dea.set_key(0xAA)
@@ -43,169 +96,132 @@ def run_basic_test():
     dea.set_key(0xCC)
     dea.set_key(0xDD)
     
-    # Data to encrypt
-    message = b"AAAAAAAAAAAAAAAA!"
-    print(f"\nOriginal message: \"{message.decode()}\"")
-    print_data("Original", message)
-    
-    # Encrypt with timing - repeat many times for better timing
-    print("\nEncrypting with key cycling (0xAA, 0xBB, 0xCC, 0xDD)...")
-    dea.reset()
-    
-    # Do multiple iterations for small data to get measurable timing
-    iterations = 100000
+    # Load the input file with timing
+    print("Loading input file...")
+    start_cycles = get_cycles()
     start_time = time.time()
-    encrypted = None
-    for _ in range(iterations):
-        dea.reset()
-        encrypted = dea.encrypt_block(message)
+    
+    input_data = load_file(input_file)
+    
+    end_cycles = get_cycles()
     end_time = time.time()
+    load_cycles = end_cycles - start_cycles
+    load_time = (end_time - start_time) * 1000  # Convert to ms
     
-    encrypt_time = (end_time - start_time) * 1000  # convert to ms
-    encrypt_time_per_op = encrypt_time / iterations
+    if input_data is None:
+        print("Failed to load input file")
+        return 1
     
-    print_data("Encrypted", encrypted)
-    print(f"Encryption time (total for {iterations} iterations): {encrypt_time:.3f} ms")
-    print(f"Encryption time (per operation): {encrypt_time_per_op:.6f} ms")
+    file_size = len(input_data)
+    print(f"File loaded successfully: {file_size} bytes")
+    print(f"File load time: {load_cycles:,} cycles ({load_time:.3f} ms)")
     
-    # Avoid division by zero
-    if encrypt_time > 0:
-        print(f"Encryption throughput: {(len(message) * iterations) / (encrypt_time / 1000):.2f} bytes/second")
-    else:
-        print("Encryption throughput: Very high (too fast to measure)")
+    print_data("Original (sample)", input_data)
     
-    # Decrypt with timing - also repeat many times
-    print("\nDecrypting...")
+    # Run a small encryption to warm up
     dea.reset()
+    warm_up = dea.encrypt_block(input_data[:1024])
     
-    start_time = time.time()
-    decrypted = None
-    for _ in range(iterations):
-        dea.reset()
-        decrypted = dea.decrypt_block(encrypted)
-    end_time = time.time()
+    # Start the encryption benchmark
+    print(f"\nStarting encryption benchmark ({file_size} bytes × {num_iterations} iterations)...")
     
-    decrypt_time = (end_time - start_time) * 1000  # convert to ms
-    decrypt_time_per_op = decrypt_time / iterations
-    
-    print(f"Decrypted: \"{decrypted.decode()}\"")
-    print_data("Decrypted", decrypted)
-    print(f"Decryption time (total for {iterations} iterations): {decrypt_time:.3f} ms")
-    print(f"Decryption time (per operation): {decrypt_time_per_op:.6f} ms")
-    
-    # Avoid division by zero
-    if decrypt_time > 0:
-        print(f"Decryption throughput: {(len(message) * iterations) / (decrypt_time / 1000):.2f} bytes/second")
-    else:
-        print("Decryption throughput: Very high (too fast to measure)")
-    
-    # Demonstrate individual byte encryption with key cycling
-    print("\n=== Key Cycling Demonstration ===")
-    dea.reset()
-    
-    test_data = [0x11, 0x22, 0x33, 0x44, 0x55]
-    for i, data_byte in enumerate(test_data):
-        result = dea.encrypt_byte(data_byte)
-        # Calculate which key was used (for display purposes)
-        key_idx = i % 4
-        key_used = 0xAA if key_idx == 0 else 0xBB if key_idx == 1 else 0xCC if key_idx == 2 else 0xDD
-        
-        print(f"Input: 0x{data_byte:02X}, Key: 0x{key_used:02X}, Output: 0x{result:02X}")
-
-def run_performance_test():
-    """Run a comprehensive performance test with larger data and multiple iterations."""
-    print("\n=== Performance Benchmark ===")
-    
-    # Test parameters
-    test_size = 10 * 1024 * 1024  # 10MB
-    num_iterations = 3  # Even fewer iterations in Python since it's much slower than C
-    
-    print(f"Test size: {test_size} bytes")
-    print(f"Number of iterations: {num_iterations}")
-    
-    # Initialize DEA
-    dea = DEA()
-    
-    # Set up 4 different keys
-    dea.reset()
-    dea.set_key(0xAA)
-    dea.set_key(0xBB)
-    dea.set_key(0xCC)
-    dea.set_key(0xDD)
-    
-    # Create test data
-    print("Creating test data...")
-    large_data = bytearray(test_size)
-    for i in range(test_size):
-        large_data[i] = ord('A') + (i % 26)
-    
-    print_data("Original (sample)", large_data)
-    
-    # Warm-up run with smaller data to avoid long initial delay
-    print("\nWarm-up run...")
-    dea.reset()
-    _ = dea.encrypt_block(large_data[:10240])  # Just encrypt the first 10KB
-    
-    # Start the benchmark
-    print(f"\nStarting benchmark ({int(test_size / (1024 * 1024))} MB × {num_iterations} iterations)...")
-    print("This may take a while in Python...")
-    
-    start_time = time.time()
+    encrypt_cycles = 0
+    encrypt_time = 0
     
     # Multiple iterations for more accurate timing
     for j in range(num_iterations):
-        sys.stdout.write(f"\rIteration {j+1}/{num_iterations}...")
-        sys.stdout.flush()
         dea.reset()
-        encrypted = dea.encrypt_block(large_data)
+        start_cycles = get_cycles()
+        start_time = time.time()
+        
+        encrypted = dea.encrypt_block(input_data)
+        
+        end_cycles = get_cycles()
+        end_time = time.time()
+        encrypt_cycles += (end_cycles - start_cycles)
+        encrypt_time += (end_time - start_time) * 1000  # Convert to ms
     
-    sys.stdout.write("\n")
-    end_time = time.time()
-    total_time = (end_time - start_time) * 1000  # convert to ms
+    # Calculate average encryption time
+    encrypt_cycles //= num_iterations
+    encrypt_time /= num_iterations
     
     # Show a sample of the encrypted data
     print_data("Encrypted (sample)", encrypted)
     
-    # Verify with decryption (just once, not in a loop)
-    print("\nVerifying with decryption (single pass)...")
+    # Verify with decryption
+    print("\nPerforming decryption...")
     dea.reset()
     
-    decrypt_start = time.time()
+    start_cycles = get_cycles()
+    start_time = time.time()
+    
     decrypted = dea.decrypt_block(encrypted)
-    decrypt_end = time.time()
-    decrypt_time = (decrypt_end - decrypt_start) * 1000  # convert to ms
+    
+    end_cycles = get_cycles()
+    end_time = time.time()
+    decrypt_cycles = end_cycles - start_cycles
+    decrypt_time = (end_time - start_time) * 1000  # Convert to ms
     
     print_data("Decrypted (sample)", decrypted)
     
     # Verify correctness
-    if decrypted == large_data:
+    if decrypted == input_data:
         print("\nVerification SUCCESSFUL - The decrypted text matches the original!")
     else:
         print("\nVerification FAILED - The decrypted text does not match the original!")
     
+    # Write encrypted and decrypted data to files
+    print("\nWriting output files...")
+    start_cycles = get_cycles()
+    start_time = time.time()
+    
+    write_success = True
+    
+    if write_file(encrypted_file, encrypted):
+        print(f"Encrypted data written to {encrypted_file}")
+    else:
+        print("Failed to write encrypted data")
+        write_success = False
+    
+    if write_file(decrypted_file, decrypted):
+        print(f"Decrypted data written to {decrypted_file}")
+    else:
+        print("Failed to write decrypted data")
+        write_success = False
+    
+    end_cycles = get_cycles()
+    end_time = time.time()
+    write_cycles = end_cycles - start_cycles
+    write_time = (end_time - start_time) * 1000  # Convert to ms
+    
+    # Calculate total time
+    total_cycles = load_cycles + encrypt_cycles + decrypt_cycles + write_cycles
+    total_time = load_time + encrypt_time + decrypt_time + write_time
+    
     # Print performance metrics
-    print(f"\n=== Performance Results ({int(test_size / (1024 * 1024))} MB Test, {num_iterations} iterations) ===")
-    print(f"Total execution time: {total_time:.3f} ms")
-    print(f"Average time per iteration: {total_time / num_iterations:.3f} ms")
-    print(f"Total data processed: {test_size * num_iterations} bytes")
-    
-    # Avoid division by zero
-    if total_time > 0:
-        mb_per_second = ((test_size * num_iterations) / (1024 * 1024)) / (total_time / 1000)
-        print(f"Throughput: {mb_per_second:.2f} MB/second")
+    mb_size = (file_size / (1024 * 1024))
+    if mb_size < 1:
+        size_str = f"{file_size / 1024:.2f}KB"
     else:
-        print("Throughput: Very high (too fast to measure)")
+        size_str = f"{mb_size:.2f}MB"
     
-    # Additional information about decryption performance
-    print("\nDecryption performance:")
-    print(f"Single decryption time: {decrypt_time:.3f} ms")
+    print(f"\n=== Performance Results ({size_str} file, {num_iterations} iterations) ===")
+    print(f"File load:     {load_cycles:,} cycles ({load_time:.3f} ms) ({load_time/total_time*100:.3f}% of total)")
+    print(f"Encryption:    {encrypt_cycles:,} cycles ({encrypt_time:.3f} ms) ({encrypt_time/total_time*100:.3f}% of total)")
+    print(f"Decryption:    {decrypt_cycles:,} cycles ({decrypt_time:.3f} ms) ({decrypt_time/total_time*100:.3f}% of total)")
+    print(f"File write:    {write_cycles:,} cycles ({write_time:.3f} ms) ({write_time/total_time*100:.3f}% of total)")
+    print(f"Total:         {total_cycles:,} cycles ({total_time:.3f} ms)")
+ 
     
-    # Avoid division by zero
-    if decrypt_time > 0:
-        print(f"Decryption throughput: {(test_size / (1024 * 1024)) / (decrypt_time / 1000):.2f} MB/second")
-    else:
-        print("Decryption throughput: Very high (too fast to measure)")
+    print("\nThroughput:")
+    print("\nCycles per byte:")
+    print(f"File load:   {load_cycles / file_size:.2f} cycles/byte")
+    print(f"Encryption:  {encrypt_cycles / file_size:.2f} cycles/byte")
+    print(f"Decryption:  {decrypt_cycles / file_size:.2f} cycles/byte")
+    print(f"File write:  {write_cycles / file_size:.2f} cycles/byte")
+    print(f"Total:       {total_cycles / file_size:.2f} cycles/byte")
+
+    return 0
 
 if __name__ == "__main__":
-    run_basic_test()
-    run_performance_test()
+    sys.exit(main())
